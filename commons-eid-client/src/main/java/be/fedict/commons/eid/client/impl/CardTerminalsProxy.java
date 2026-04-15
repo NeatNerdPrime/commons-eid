@@ -30,9 +30,9 @@ import javax.smartcardio.CardTerminal;
 import javax.smartcardio.CardTerminals;
 import javax.smartcardio.TerminalFactory;
 
-import org.apache.commons.lang.exception.ExceptionUtils;
 
 import be.fedict.commons.eid.client.spi.Logger;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 
 /**
  * Based on code from BOSA, but reworked a bit for older Java 7 runtimes.
