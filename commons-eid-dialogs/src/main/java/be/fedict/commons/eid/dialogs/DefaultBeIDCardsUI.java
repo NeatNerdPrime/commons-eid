@@ -1,7 +1,7 @@
 /*
  * Commons eID Project.
  * Copyright (C) 2008-2013 FedICT.
- * Copyright (C) 2009-2024 e-Contract.be BV.
+ * Copyright (C) 2009-2026 e-Contract.be BV.
  *
  * This is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License version
@@ -24,6 +24,7 @@ import java.awt.GraphicsEnvironment;
 import java.awt.Insets;
 import java.util.Collection;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import javax.swing.BoxLayout;
 import javax.swing.JFrame;
@@ -43,6 +44,20 @@ import be.fedict.commons.eid.client.spi.BeIDCardsUI;
  * 
  */
 public class DefaultBeIDCardsUI implements BeIDCardsUI {
+
+	/**
+	 * Guards against a second "Select eID card" dialog being opened while one is
+	 * already showing anywhere in this JVM. This happens when code triggered during
+	 * the first selection re-enters BeIDCards.getOneBeIDCard() - for example the
+	 * eID JCA SecureRandom provider being invoked (via ImageIO / a high-priority
+	 * BeIDProvider) from within {@link BeIDSelector}'s own card-reading threads.
+	 * Without this guard every such call stacks another modal dialog and spawns
+	 * ListDataUpdater threads that collide on beginExclusive() of the very cards
+	 * the outer selection is still reading ("Exclusive access has already been
+	 * assigned to Thread ListDataUpdater").
+	 */
+	private static final AtomicBoolean SELECTING = new AtomicBoolean(false);
+
 	private final Component parentComponent;
 	private Messages messages;
 	private JFrame adviseFrame;
@@ -95,11 +110,17 @@ public class DefaultBeIDCardsUI implements BeIDCardsUI {
 	@Override
 	public BeIDCard selectBeIDCard(final Collection<BeIDCard> availableCards)
 			throws CancelledException, OutOfCardsException {
+		if (!SELECTING.compareAndSet(false, true)) {
+			// A BeID card selection dialog is already showing. Refuse this
+			// re-entrant request rather than stacking a second modal dialog.
+			throw new CancelledException();
+		}
 		try {
 			this.selectionDialog = new BeIDSelector(this.parentComponent, "Select eID card", availableCards);
 			return this.selectionDialog.choose();
 		} finally {
 			this.selectionDialog = null;
+			SELECTING.set(false);
 		}
 	}
 

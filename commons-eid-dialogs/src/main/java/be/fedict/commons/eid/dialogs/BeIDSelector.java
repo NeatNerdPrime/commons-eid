@@ -1,7 +1,7 @@
 /*
  * Commons eID Project.
  * Copyright (C) 2008-2013 FedICT.
- * Copyright (C) 2017-2020 e-Contract.be BV.
+ * Copyright (C) 2017-2026 e-Contract.be BV.
  *
  * This is free software; you can redistribute it and/or modify it
  * under the terms of the GNU Lesser General Public License version
@@ -40,6 +40,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import javax.imageio.ImageIO;
+import javax.imageio.stream.MemoryCacheImageInputStream;
 import javax.security.auth.x500.X500Principal;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
@@ -161,29 +162,40 @@ public class BeIDSelector {
 	}
 
 	public BeIDCard choose() throws OutOfCardsException, CancelledException {
-		this.waitUntilIdentitiesRead();
+		try {
+			this.waitUntilIdentitiesRead();
 
-		this.dialog.setLocationRelativeTo(this.parentComponent);
+			this.dialog.setLocationRelativeTo(this.parentComponent);
 
-		this.dialog.setResizable(false);
-		this.dialog.setVisible(true);
+			this.dialog.setResizable(false);
+			this.dialog.setVisible(true);
 
-		// dialog is modal so setVisible will block until dispose is called.
-		// mouseListener calls dispose after setting selection, on double-click
-		// removeFromList calls dispose after setting outOfCards when last card
-		// removed
-		// user closing dialog will have no selection and outOfCards not set
-		// indicating cancel
+			// dialog is modal so setVisible will block until dispose is called.
+			// mouseListener calls dispose after setting selection, on double-click
+			// removeFromList calls dispose after setting outOfCards when last card
+			// removed
+			// user closing dialog will have no selection and outOfCards not set
+			// indicating cancel
 
-		if (this.outOfCards) {
-			throw new OutOfCardsException();
+			if (this.outOfCards) {
+				throw new OutOfCardsException();
+			}
+			if (this.selectedListData.getCard() == null) {
+				throw new CancelledException();
+			}
+
+			return this.selectedListData.getCard();
+		} finally {
+			// Always stop and join the ListDataUpdater worker threads before
+			// returning, on every exit path including the OutOfCardsException
+			// and CancelledException throws. Otherwise these threads keep
+			// running - and keep holding beginExclusive() on the cards - while
+			// the caller (BeIDCards.getOneBeIDCard) loops and creates a new
+			// BeIDSelector, whose own workers then collide with the leaked ones
+			// ("Exclusive access has already been assigned to Thread
+			// ListDataUpdater").
+			stop();
 		}
-		if (this.selectedListData.getCard() == null) {
-			throw new CancelledException();
-		}
-
-		return this.selectedListData.getCard();
-
 	}
 
 	// ----------------------------------------------------------------------------------------------------
@@ -490,7 +502,14 @@ public class BeIDSelector {
 				});
 
 				final byte[] photoFile = this.listData.getCard().readFile(FileType.Photo);
-				final BufferedImage photoImage = ImageIO.read(new ByteArrayInputStream(photoFile));
+				// Decode via an in-memory ImageInputStream. Plain
+				// ImageIO.read(InputStream) would create a FileCacheImageInputStream
+				// -> Files.createTempFile -> SecureRandom, and when a high-priority
+				// BeIDProvider is installed that SecureRandom is the eID card, which
+				// re-enters card selection from this very reader thread.
+				// ImageIO.read(ImageInputStream) closes the stream itself.
+				final BufferedImage photoImage = ImageIO
+						.read(new MemoryCacheImageInputStream(new ByteArrayInputStream(photoFile)));
 				this.listData.setPhoto(new ImageIcon(photoImage));
 				this.selectionDialog.updateListData(this, this.listData);
 				setWorkerName(authCert, "All Done");
